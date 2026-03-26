@@ -6,12 +6,14 @@ Pure HTML canvas rain effect. No libraries. Just me figuring out how this works.
 
 ## Live
 
-👉 [View Animation](https://yota321.github.io/Rainfall_Animation_Learning/)
+👉 [View Latest (v3)](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v3.html)
 
 Or jump to a specific version:
 
+- [index / v2](https://yota321.github.io/Rainfall_Animation_Learning/) — stable version
 - [Rain v1](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v1.html)
 - [Rain v2](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v2.html)
+- [Rain v3](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v3.html)
 
 ---
 
@@ -23,14 +25,51 @@ This repo is my learning process, not a finished product.
 
 ---
 
-## What It Does
+## Version History
 
-- Raindrops fall straight down from random positions across the screen
-- Each drop hits the surface and creates a ripple and splash
-- Water-blue background
-- Slow, calm rain
-- Crisp on retina displays
-- Fully responsive
+### v1 — First Attempt
+- Basic canvas rain
+- Drops fell toward a vanishing point, creating an upside-down V shape
+- Black background
+- Resolution looked blurry on high-DPI screens
+- No interactions
+
+### v2 — Fixed the Basics
+- Drops now fall straight down from random positions across the full screen width
+- Fixed resolution with `devicePixelRatio` for crisp rendering on retina screens
+- Water-blue background gradient
+- Slow, calm rain instead of heavy/fast
+- Ripples, splash particles and mist added
+
+### v3 — Perspective + Interactions
+- Full tilted perspective surface, horizon line at ~38% of screen height
+- Ripples are flat ellipses near the horizon, rounder near the bottom, like rain on actual water
+- Drops fall toward random points on the surface instead of just straight down
+- Wind toggle with smooth easing, direction label, affects drops, particles and mist
+- Day / Night toggle, two full colour palettes
+- Click anywhere on the surface to spawn a ripple and crown
+- Mobile touch support, tap and drag both work
+- Fully responsive, surface recalculates on every resize
+
+---
+
+## What's Coming in v4
+
+- [ ] Sound, ambient rain audio that reacts to density
+- [ ] Rain intensity slider, from drizzle to downpour
+- [ ] Splash size based on drop depth
+- [ ] Underwater / looking-up-through-water mode
+
+---
+
+## Files
+
+| File | What it is |
+|------|------------|
+| `index.html` | Stable version (same as v2) |
+| `Rain_v1.html` | First attempt |
+| `Rain_v2.html` | Kept here, index updates to newer versions over time |
+| `Rain_v3.html` | Latest version |
 
 ---
 
@@ -42,16 +81,9 @@ This repo is my learning process, not a finished product.
 - Depth-based scaling for near vs far drops
 - Particle systems: spawning, updating, culling
 - `createLinearGradient` for the streak fade on each drop
-
----
-
-## Files
-
-| File | What it is |
-|------|------------|
-| `index.html` | The final version, what you see live |
-| `Rain_v1.html` | First attempt, perspective rain converging to a vanishing point |
-| `Rain_v2.html` | Kept it here since index will get updated to v3 or something eventually |
+- Affine perspective projection for a tilted surface
+- Lerping wind strength for smooth transitions
+- Handling pointer and touch events on canvas
 
 ---
 
@@ -60,15 +92,6 @@ This repo is my learning process, not a finished product.
 [This Website Effect is Weirdly Addictive! by Snippets Code](https://youtu.be/veHKIu6-V1I)
 
 Not a copy. Used it as a reference to understand the concept, then built my own version from scratch.
-
----
-
-## What's Next
-
-- [ ] Wind and angle effect
-- [ ] Mouse click ripple
-- [ ] Day / night toggle
-- [ ] Mobile touch support
 
 ---
 
