@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Rain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+
+  #ui {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    gap: 10px;
+    z-index: 10;
+  }
+
+  .btn {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.75);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    padding: 7px 14px;
+    border-radius: 20px;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: background 0.2s, color 0.2s;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .btn:hover { background: rgba(255,255,255,0.16); color: #fff; }
+  .btn.active { background: rgba(255,255,255,0.22); color: #fff; }
+
+  #wind-label {
+    position: fixed;
+    bottom: 62px;
+    right: 24px;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.08em;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="wind-label">WIND: CALM</div>
+
+<div id="ui">
+  <button class="btn" id="btn-wind">🌬 WIND</button>
+  <button class="btn" id="btn-night">☀ DAY</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const windLabel = document.getElementById('wind-label');
+
+/* ─── STATE ─────────────────────────────────── */
+let W, H, DPR;
+let nightMode  = true;   // starts as night (dark)
+let windActive = false;
+let windStrength = 0;    // current wind (lerps toward target)
+let windTarget   = 0;
+
+/* ─── RESIZE ─────────────────────────────────── */
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W   = window.innerWidth;
+  H   = window.innerHeight;
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.scale(DPR, DPR);
+  buildSurface();
+  initMist();
+}
+window.addEventListener('resize', resize);
+
+/* ─── HELPERS ─────────────────────────────────── */
+const rand    = (a, b) => Math.random() * (b - a) + a;
+const randInt = (a, b) => Math.floor(rand(a, b));
+const lerp    = (a, b, t) => a + (b - a) * t;
+
+/* ─── PERSPECTIVE SURFACE ────────────────────────
+   The "water surface" is a tilted plane.
+   We map a logical 2D grid to screen using a
+   simple affine tilt: the surface starts at
+   surfaceTopY (center of screen) and goes to
+   bottom of screen. X is spread wide at the
+   bottom and narrower at the top horizon.
+   ─────────────────────────────────────────────── */
+let SURF_Y0, SURF_Y1, SURF_MID_X;
+
+function buildSurface() {
+  SURF_Y0    = H * 0.38;   // horizon line
+  SURF_Y1    = H * 1.05;   // beyond bottom edge
+  SURF_MID_X = W * 0.5;
+}
+
+/* Convert surface coords (sx 0..1, sy 0..1) to screen (px, py)
+   sx=0 left edge, sx=1 right edge, sy=0 horizon, sy=1 far bottom */
+function surfToScreen(sx, sy) {
+  const screenY = lerp(SURF_Y0, SURF_Y1, sy);
+  // perspective spread: near = full width, far = narrow
+  const spread  = lerp(W * 0.12, W * 0.52, sy);
+  const screenX = SURF_MID_X + (sx - 0.5) * 2 * spread;
+  return { x: screenX, y: screenY };
+}
+
+/* For a drop: pick a random surface position and fall toward it */
+/* ─── DEPTH / THEME HELPERS ──────────────────── */
+const depthScale = d => 0.20 + d * 0.80;
+const depthSpeed = d => 1.0  + d * 2.8;
+const depthAlpha = d => 0.10 + d * 0.80;
+
+function theme() {
+  return nightMode ? {
+    sky0:  '#03090f', sky1: '#061828', sky2: '#082035', sky3: '#061525',
+    shimmer: 'rgba(20,80,140,0.10)',
+    fog:     'rgba(10,40,80,0.22)',
+    drop:    (depth, a) => {
+      const r = Math.round(160 + depth * 80);
+      const g = Math.round(200 + depth * 40);
+      return `rgba(${r},${g},255,${a})`;
+    }
+  } : {
+    sky0:  '#b8d4e8', sky1: '#89b8d4', sky2: '#6aaac8', sky3: '#7ab0c0',
+    shimmer: 'rgba(120,180,220,0.12)',
+    fog:     'rgba(160,200,230,0.18)',
+    drop:    (depth, a) => {
+      const r = Math.round(140 + depth * 60);
+      const g = Math.round(185 + depth * 40);
+      const b = Math.round(220 + depth * 35);
+      return `rgba(${r},${g},${b},${a})`;
+    }
+  };
+}
+
+/* ─── BACKGROUND ──────────────────────────────── */
+function drawBG() {
+  const t = theme();
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0,    t.sky0);
+  g.addColorStop(0.35, t.sky1);
+  g.addColorStop(0.70, t.sky2);
+  g.addColorStop(1,    t.sky3);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // horizon glow line
+  const hg = ctx.createLinearGradient(0, SURF_Y0 - 30, 0, SURF_Y0 + 60);
+  hg.addColorStop(0,   'rgba(60,140,220,0.00)');
+  hg.addColorStop(0.4, nightMode ? 'rgba(60,140,220,0.06)' : 'rgba(255,255,255,0.12)');
+  hg.addColorStop(1,   'rgba(60,140,220,0.00)');
+  ctx.fillStyle = hg;
+  ctx.fillRect(0, SURF_Y0 - 30, W, 90);
+
+  // surface shimmer
+  const sh = ctx.createLinearGradient(0, SURF_Y0, 0, H);
+  sh.addColorStop(0, 'rgba(0,0,0,0)');
+  sh.addColorStop(1, t.shimmer);
+  ctx.fillStyle = sh;
+  ctx.fillRect(0, SURF_Y0, W, H - SURF_Y0);
+}
+
+/* ─── DROP ───────────────────────────────────── */
+class Drop {
+  constructor(stagger = false) { this.reset(stagger); }
+
+  reset(stagger = false) {
+    this.depth = Math.pow(Math.random(), 1.3);
+    // surface destination
+    this.sx    = rand(0.02, 0.98);
+    this.sy    = rand(0.02, 0.98);
+    const dest = surfToScreen(this.sx, this.sy);
+    this.landX = dest.x;
+    this.landY = dest.y;
+
+    const sc      = depthScale(this.depth);
+    this.len      = rand(12, 32) * sc;
+    this.speed    = (1.8 + rand(0, 1.2)) * depthSpeed(this.depth);
+    this.alpha    = depthAlpha(this.depth) * rand(0.7, 1.0);
+    this.width    = Math.max(0.3, 0.5 * sc);
+
+    // start well above the landing point
+    const startY  = stagger ? rand(-H * 0.5, this.landY - 20) : rand(-this.len * 3, -this.len);
+    const travel  = this.landY - startY;
+    this.progress = stagger ? rand(0, 0.85) : 0;
+    this.startX   = this.landX + rand(-8, 8) * sc; // slight horizontal drift start
+    this.startY   = startY;
+    this.done     = false;
+  }
+
+  get currentPos() {
+    const t  = this.progress;
+    // wind shifts x as drop falls
+    const wx = windStrength * t * 60 * depthScale(this.depth);
+    return {
+      x: lerp(this.startX, this.landX, t) + wx,
+      y: lerp(this.startY, this.landY, t)
+    };
+  }
+
+  update() {
+    const dist = this.landY - this.startY;
+    this.progress += this.speed / Math.max(1, dist);
+    if (this.progress >= 1) {
+      const p = this.currentPos;
+      spawnImpact(p.x, this.landY, this.depth);
+      this.done = true;
+    }
+  }
+
+  draw() {
+    const pos  = this.currentPos;
+    const t    = this.theme || theme();
+    // tail direction follows wind angle
+    const wx   = windStrength * 18 * depthScale(this.depth);
+    const tx   = pos.x - wx - 0;
+    const ty   = pos.y - this.len;
+    const g    = ctx.createLinearGradient(tx, ty, pos.x, pos.y);
+    g.addColorStop(0, t.drop(this.depth, 0));
+    g.addColorStop(1, t.drop(this.depth, this.alpha));
+    ctx.save();
+    ctx.strokeStyle = g;
+    ctx.lineWidth   = this.width;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ─── RIPPLE ─────────────────────────────────── */
+class Ripple {
+  constructor(x, y, depth, delay = 0) {
+    this.x = x; this.y = y; this.depth = depth;
+    const sc    = depthScale(depth);
+    // perspective squash: ripples near horizon are very flat
+    // near bottom = more circular
+    const surfFrac = Math.max(0, Math.min(1, (y - SURF_Y0) / (H - SURF_Y0)));
+    this.r      = 0;
+    this.maxR   = rand(18, 65) * sc;
+    this.spd    = rand(0.30, 0.70) * (0.4 + depth * 0.6);
+    this.base   = depthAlpha(depth) * 0.72;
+    this.alpha  = this.base;
+    this.delay  = delay; this.age = -delay;
+    this.ry     = 0.04 + surfFrac * 0.28;  // flat at horizon, rounder near bottom
+    this.done   = false;
+  }
+  update() {
+    this.age++;
+    if (this.age < 0) return;
+    this.r    += this.spd;
+    this.alpha = this.base * (1 - this.r / this.maxR);
+    if (this.r >= this.maxR) this.done = true;
+  }
+  draw() {
+    if (this.age < 0 || this.alpha < 0.01) return;
+    const t = theme();
+    ctx.save();
+    ctx.strokeStyle = t.drop(this.depth, this.alpha);
+    ctx.lineWidth   = Math.max(0.3, 0.6 * depthScale(this.depth));
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y, this.r, this.r * this.ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ─── CROWN ──────────────────────────────────── */
+class Crown {
+  constructor(x, y, depth) {
+    this.x = x; this.y = y; this.depth = depth;
+    this.scale   = depthScale(depth) * 1.1;
+    const surfFrac = Math.max(0, Math.min(1, (y - SURF_Y0) / (H - SURF_Y0)));
+    this.squash  = 0.06 + surfFrac * 0.30;
+    this.life    = 0;
+    this.maxLife = randInt(16, 28);
+    this.done    = false;
+    this.spikes  = randInt(4, 7);
+    this.spikeData = Array.from({length: this.spikes}, (_, i) => ({
+      angle: (i / this.spikes) * Math.PI * 2 - Math.PI / 2 + rand(-0.2, 0.2),
+      h:     rand(0.6, 1.4)
+    }));
+  }
+  update() { this.life++; if (this.life >= this.maxLife) this.done = true; }
+  draw() {
+    const t      = this.life / this.maxLife;
+    const riseT  = Math.min(t / 0.3, 1);
+    const fallT  = t > 0.3 ? (t - 0.3) / 0.7 : 0;
+    const alpha  = riseT * (1 - fallT) * depthAlpha(this.depth);
+    if (alpha < 0.01) return;
+    const th = theme();
+    const spikeH = 14 * this.scale * riseT * (1 - fallT * 0.6);
+    const baseR  = 3.5 * this.scale;
+    const spikeW = 2.0 * this.scale;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.scale(1, this.squash + (1 - this.squash) * 0.28);
+    ctx.fillStyle = th.drop(this.depth, alpha);
+
+    for (const s of this.spikeData) {
+      ctx.save();
+      ctx.rotate(s.angle);
+      const h = spikeH * s.h;
+      ctx.beginPath();
+      ctx.moveTo(-spikeW * 0.5, -baseR);
+      ctx.quadraticCurveTo(spikeW * 0.12, -baseR - h * 1.1, 0, -baseR - h);
+      ctx.quadraticCurveTo(-spikeW * 0.12, -baseR - h * 1.1, spikeW * 0.5, -baseR);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = th.drop(this.depth, alpha * 0.4);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, baseR * 1.4, baseR * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ─── SPLASH PARTICLE ────────────────────────── */
+class Particle {
+  constructor(x, y, depth) {
+    this.x = x; this.y = y; this.depth = depth;
+    const sc   = depthScale(depth);
+    const ang  = rand(-Math.PI * 0.9, -Math.PI * 0.1);
+    const spd  = rand(0.5, 2.5) * sc;
+    this.vx    = Math.cos(ang) * spd + windStrength * 1.5 * sc;
+    this.vy    = Math.sin(ang) * spd;
+    this.grav  = rand(0.05, 0.12) * sc;
+    this.life  = 0;
+    this.maxLife = randInt(20, 44);
+    this.r     = rand(0.5, 1.8) * sc;
+    this.done  = false;
+  }
+  update() {
+    this.vy += this.grav;
+    this.x  += this.vx;
+    this.y  += this.vy;
+    this.life++;
+    if (this.life >= this.maxLife) this.done = true;
+  }
+  draw() {
+    const a = (1 - this.life / this.maxLife) * depthAlpha(this.depth) * 0.85;
+    const t = theme();
+    ctx.save();
+    ctx.fillStyle = t.drop(this.depth, a);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ─── MIST ───────────────────────────────────── */
+let mistDots = [];
+class MistDot {
+  constructor(init = false) { this.reset(init); }
+  reset(init = false) {
+    this.depth = Math.random();
+    this.x     = rand(-20, W + 20);
+    const sc   = depthScale(this.depth);
+    const surfFrac = Math.random();
+    this.y     = init ? rand(SURF_Y0, H) : H + 4;
+    this.r     = rand(0.3, 1.4) * sc;
+    this.alpha = rand(0.015, 0.09) * depthAlpha(this.depth);
+    this.vx    = rand(-0.08, 0.08) + windStrength * 0.3 * sc;
+    this.vy    = -(rand(0.05, 0.18) * sc);
+  }
+  update() {
+    this.x += this.vx + windStrength * 0.15 * depthScale(this.depth);
+    this.y += this.vy;
+    if (this.y < SURF_Y0 - 10) this.reset();
+  }
+  draw() {
+    const t = theme();
+    ctx.save();
+    ctx.fillStyle = t.drop(this.depth, this.alpha);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function initMist() {
+  mistDots = [];
+  for (let i = 0; i < 90; i++) mistDots.push(new MistDot(true));
+}
+
+/* ─── IMPACT ─────────────────────────────────── */
+let drops = [], ripples = [], particles = [], crowns = [];
+
+function spawnImpact(x, y, depth) {
+  if (y < SURF_Y0 - 10) return; // don't splash above horizon
+  const rings = randInt(2, 4);
+  for (let i = 0; i < rings; i++) ripples.push(new Ripple(x, y, depth, i * 8));
+  crowns.push(new Crown(x, y, depth));
+  const n = randInt(3, 10);
+  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, depth));
+}
+
+/* ─── CLICK / TOUCH RIPPLE ───────────────────── */
+function pointerRipple(px, py) {
+  // depth based on vertical position
+  const depth = Math.max(0.1, Math.min(1, (py - SURF_Y0) / (H - SURF_Y0)));
+  spawnImpact(px, py, depth);
+}
+
+canvas.addEventListener('click', e => {
+  pointerRipple(e.clientX, e.clientY);
+});
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    pointerRipple(t.clientX, t.clientY);
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (Math.random() < 0.3) pointerRipple(t.clientX, t.clientY);
+  }
+}, { passive: false });
+
+/* ─── UI BUTTONS ─────────────────────────────── */
+const btnWind  = document.getElementById('btn-wind');
+const btnNight = document.getElementById('btn-night');
+
+btnWind.addEventListener('click', () => {
+  windActive = !windActive;
+  windTarget = windActive ? rand(0.4, 1.0) * (Math.random() < 0.5 ? 1 : -1) : 0;
+  btnWind.classList.toggle('active', windActive);
+});
+
+btnNight.addEventListener('click', () => {
+  nightMode = !nightMode;
+  btnNight.textContent = nightMode ? '☀ DAY' : '🌙 NIGHT';
+});
+
+/* ─── WIND LABEL ─────────────────────────────── */
+function updateWindLabel() {
+  const abs = Math.abs(windStrength);
+  let label = 'CALM';
+  if (abs > 0.05) label = windStrength > 0 ? 'EAST' : 'WEST';
+  if (abs > 0.4)  label = windStrength > 0 ? 'STRONG EAST' : 'STRONG WEST';
+  windLabel.textContent = `WIND: ${label}`;
+  windLabel.style.opacity = abs > 0.05 ? '0.55' : '0.25';
+}
+
+/* ─── SEED ───────────────────────────────────── */
+resize();
+for (let i = 0; i < 60; i++) drops.push(new Drop(true));
+
+/* ─── LOOP ───────────────────────────────────── */
+let spawnT = 0;
+const SPAWN_EVERY = 4;
+
+function loop() {
+  // wind lerp
+  windStrength = lerp(windStrength, windTarget, 0.025);
+  if (!windActive) windTarget = lerp(windTarget, 0, 0.01);
+  updateWindLabel();
+
+  // spawn
+  if (++spawnT >= SPAWN_EVERY) { drops.push(new Drop()); spawnT = 0; }
+
+  // update
+  mistDots.forEach(d => d.update());
+  drops.forEach(d => d.update());
+  ripples.forEach(r => r.update());
+  crowns.forEach(c => c.update());
+  particles.forEach(p => p.update());
+
+  // cull
+  drops     = drops.filter(d => !d.done);
+  ripples   = ripples.filter(r => !r.done);
+  crowns    = crowns.filter(c => !c.done);
+  particles = particles.filter(p => !p.done);
+
+  // draw
+  drawBG();
+
+  // motion blur / fade trail
+  const t = theme();
+  ctx.fillStyle = nightMode ? 'rgba(3,9,15,0.28)' : 'rgba(180,210,230,0.22)';
+  ctx.fillRect(0, 0, W, H);
+
+  mistDots.forEach(d => d.draw());
+  ripples.forEach(r => r.draw());
+  drops.forEach(d => d.draw());
+  particles.forEach(p => p.draw());
+  crowns.forEach(c => c.draw());
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
