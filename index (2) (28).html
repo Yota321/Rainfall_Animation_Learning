@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a2a3d; }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+let W, H, DPR;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W   = window.innerWidth;
+  H   = window.innerHeight;
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
+  ctx.scale(DPR, DPR);
+}
+resize();
+window.addEventListener('resize', () => { resize(); initMist(); });
+
+const rand    = (a, b) => Math.random() * (b - a) + a;
+const randInt = (a, b) => Math.floor(rand(a, b));
+
+/* ── depth helpers (0 = far, 1 = near) ── */
+const depthScale = d => 0.25 + d * 0.75;
+const depthSpeed = d => 1.2  + d * 3.2;     // slow base
+const depthAlpha = d => 0.12 + d * 0.78;
+
+function dropColor(depth, alpha) {
+  /* near = bright icy white-blue, far = muted steel */
+  const r = Math.round(180 + depth * 60);
+  const g = Math.round(215 + depth * 35);
+  const b = 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* ── background gradient (water blue) ── */
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0,   '#061c2e');
+  g.addColorStop(0.4, '#0d3352');
+  g.addColorStop(0.75,'#0e4a6e');
+  g.addColorStop(1,   '#0a3350');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  /* subtle shimmer layer at bottom third */
+  const sh = ctx.createLinearGradient(0, H * 0.7, 0, H);
+  sh.addColorStop(0, 'rgba(40,130,200,0.00)');
+  sh.addColorStop(1, 'rgba(40,160,230,0.09)');
+  ctx.fillStyle = sh;
+  ctx.fillRect(0, H * 0.7, W, H * 0.3);
+}
+
+/* ══════════════════════════════════════
+   DROP  — falls straight down from a
+   random X anywhere across the full width
+   ══════════════════════════════════════ */
+class Drop {
+  constructor(stagger = false) { this.reset(stagger); }
+
+  reset(stagger = false) {
+    this.depth  = Math.pow(Math.random(), 1.2);
+    const sc    = depthScale(this.depth);
+    this.x      = rand(0, W);                          // anywhere across screen
+    this.speed  = (2.2 + rand(0, 1.4)) * depthSpeed(this.depth); // slow
+    this.len    = rand(10, 28) * sc;
+    this.y      = stagger ? rand(-H * 0.6, 0) : rand(-this.len * 2, -this.len);
+    this.alpha  = depthAlpha(this.depth) * rand(0.7, 1.0);
+    this.width  = Math.max(0.35, 0.55 * sc);
+    this.done   = false;
+  }
+
+  update() {
+    this.y += this.speed;
+    if (this.y - this.len > H) {
+      spawnImpact(this.x, H * rand(0.8, 1.02), this.depth);
+      this.done = true;
+    }
+  }
+
+  draw() {
+    const top = this.y - this.len;
+    const g   = ctx.createLinearGradient(this.x, top, this.x, this.y);
+    g.addColorStop(0, dropColor(this.depth, 0));
+    g.addColorStop(1, dropColor(this.depth, this.alpha));
+    ctx.save();
+    ctx.strokeStyle = g;
+    ctx.lineWidth   = this.width;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(this.x, top);
+    ctx.lineTo(this.x, this.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ══════════════════════════════════════  RIPPLE  */
+class Ripple {
+  constructor(x, y, depth, delay = 0) {
+    this.x = x; this.y = y; this.depth = depth;
+    const sc     = depthScale(depth);
+    this.r       = 0;
+    this.maxR    = rand(14, 52) * sc;
+    this.spd     = rand(0.28, 0.65) * (0.5 + depth * 0.5);
+    this.base    = depthAlpha(depth) * 0.7;
+    this.alpha   = this.base;
+    this.delay   = delay; this.age = -delay;
+    this.ry      = 0.05 + depth * 0.22;
+    this.done    = false;
+  }
+  update() {
+    this.age++;
+    if (this.age < 0) return;
+    this.r    += this.spd;
+    this.alpha = this.base * (1 - this.r / this.maxR);
+    if (this.r >= this.maxR) this.done = true;
+  }
+  draw() {
+    if (this.age < 0 || this.alpha < 0.01) return;
+    ctx.save();
+    ctx.strokeStyle = dropColor(this.depth, this.alpha);
+    ctx.lineWidth   = Math.max(0.3, 0.6 * depthScale(this.depth));
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y, this.r, this.r * this.ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ══════════════════════════════════════  SPLASH PARTICLE  */
+class Particle {
+  constructor(x, y, depth) {
+    this.x = x; this.y = y; this.depth = depth;
+    const sc    = depthScale(depth);
+    const ang   = rand(-Math.PI * 0.92, -Math.PI * 0.08);
+    const spd   = rand(0.4, 2.2) * sc;
+    this.vx     = Math.cos(ang) * spd;
+    this.vy     = Math.sin(ang) * spd;
+    this.grav   = rand(0.04, 0.1) * sc;
+    this.life   = 0;
+    this.maxLife= randInt(22, 48);
+    this.r      = rand(0.6, 1.8) * sc;
+    this.done   = false;
+  }
+  update() {
+    this.vy += this.grav;
+    this.x  += this.vx;
+    this.y  += this.vy;
+    this.life++;
+    if (this.life >= this.maxLife) this.done = true;
+  }
+  draw() {
+    const a = (1 - this.life / this.maxLife) * depthAlpha(this.depth) * 0.85;
+    ctx.save();
+    ctx.fillStyle = dropColor(this.depth, a);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ══════════════════════════════════════  MIST */
+let mistDots = [];
+class MistDot {
+  constructor(init = false) { this.reset(init); }
+  reset(init = false) {
+    this.depth = Math.random();
+    this.x     = rand(0, W);
+    this.y     = init ? rand(0, H) : H + 4;
+    const sc   = depthScale(this.depth);
+    this.r     = rand(0.4, 1.6) * sc;
+    this.alpha = rand(0.02, 0.10) * depthAlpha(this.depth);
+    this.vx    = rand(-0.1, 0.1);
+    this.vy    = -(rand(0.06, 0.25) * sc);   // drift upward slowly
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.y < -4) this.reset();
+  }
+  draw() {
+    ctx.save();
+    ctx.fillStyle = dropColor(this.depth, this.alpha);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function initMist() {
+  mistDots = [];
+  for (let i = 0; i < 80; i++) mistDots.push(new MistDot(true));
+}
+initMist();
+
+/* ══════════════════════════════════════  IMPACT  */
+let drops = [], ripples = [], particles = [];
+
+function spawnImpact(x, y, depth) {
+  const rings = randInt(2, 4);
+  for (let i = 0; i < rings; i++) ripples.push(new Ripple(x, y, depth, i * 8));
+  const n = randInt(3, 10);
+  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, depth));
+}
+
+/* ── seed initial drops spread across screen ── */
+for (let i = 0; i < 55; i++) drops.push(new Drop(true));
+
+/* ══════════════════════════════════════  LOOP  */
+let spawnT = 0;
+const SPAWN_EVERY = 5;   // fewer frames between spawns = more drops; higher = sparser
+
+function loop() {
+  /* spawn a new drop every N frames */
+  if (++spawnT >= SPAWN_EVERY) {
+    drops.push(new Drop());
+    spawnT = 0;
+  }
+
+  /* update */
+  mistDots.forEach(d => d.update());
+  drops.forEach(d => d.update());
+  ripples.forEach(r => r.update());
+  particles.forEach(p => p.update());
+
+  /* cull */
+  drops     = drops.filter(d => !d.done);
+  ripples   = ripples.filter(r => !r.done);
+  particles = particles.filter(p => !p.done);
+
+  /* ── draw ── */
+  drawBG();
+
+  /* trail fade */
+  ctx.fillStyle = 'rgba(6,28,46,0.30)';
+  ctx.fillRect(0, 0, W, H);
+
+  mistDots.forEach(d => d.draw());
+  ripples.forEach(r => r.draw());
+  drops.forEach(d => d.draw());
+  particles.forEach(p => p.draw());
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>

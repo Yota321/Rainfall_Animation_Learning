@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rainfall</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H, HORIZON_Y, VP_X;
+
+function resize() {
+  W         = canvas.width  = window.innerWidth;
+  H         = canvas.height = window.innerHeight;
+  HORIZON_Y = H * 0.32;
+  VP_X      = W * 0.50;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const rand    = (a, b) => Math.random() * (b - a) + a;
+const randInt = (a, b) => Math.floor(rand(a, b));
+const lerp    = (a, b, t) => a + (b - a) * t;
+const clamp   = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Depth helpers  (depth 0 = far/horizon, 1 = near/foreground)
+const depthScale = d => 0.18 + d * 0.82;
+const depthSpeed = d => 0.3  + d * 1.7;
+const depthAlpha = d => 0.15 + d * 0.85;
+const groundY    = d => HORIZON_Y + d * (H - HORIZON_Y) * 0.97;
+const spreadX    = d => d * W * 0.52;
+
+function depthColor(d, alpha) {
+  const r = Math.round(lerp(160, 255, d));
+  const g = Math.round(lerp(195, 255, d));
+  const b = 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+const RAIN_ANGLE = 0.08; // slight slant
+
+// ---- pools ----
+let drops = [], ripples = [], crowns = [], particles = [], mistDots = [];
+
+// ---- Drop ----
+class Drop {
+  constructor(stagger = false) { this.reset(stagger); }
+  reset(stagger = false) {
+    this.depth  = Math.pow(Math.random(), 1.3);
+    this.scale  = depthScale(this.depth);
+    this.speed  = (11 + rand(0, 9)) * depthSpeed(this.depth);
+    this.landX  = VP_X + rand(-1, 1) * spreadX(this.depth);
+    this.landY  = groundY(this.depth);
+    this.len    = rand(10, 26) * this.scale;
+    const travel= this.landY + H * 0.4;
+    this.y      = stagger ? rand(-H * 0.5, this.landY) : rand(-H * 0.5, HORIZON_Y * 0.4);
+    this.done   = false;
+  }
+  get x() {
+    const t = clamp((this.y + H * 0.4) / (this.landY + H * 0.4), 0, 1);
+    return lerp(VP_X, this.landX, t) + (this.y - this.landY) * RAIN_ANGLE;
+  }
+  update() {
+    this.y += this.speed;
+    if (this.y >= this.landY) { spawnImpact(this.landX, this.landY, this.depth); this.done = true; }
+  }
+  draw() {
+    const x  = this.x;
+    const a  = depthAlpha(this.depth) * 0.9;
+    const tx = x - this.len * Math.sin(RAIN_ANGLE);
+    const ty = this.y - this.len;
+    const g  = ctx.createLinearGradient(tx, ty, x, this.y);
+    g.addColorStop(0, depthColor(this.depth, 0));
+    g.addColorStop(1, depthColor(this.depth, a));
+    ctx.save();
+    ctx.strokeStyle = g;
+    ctx.lineWidth   = clamp(0.6 * this.scale, 0.35, 1.8);
+    ctx.lineCap     = 'round';
+    ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, this.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---- Ripple ----
+class Ripple {
+  constructor(x, y, depth, delay = 0) {
+    this.x = x; this.y = y; this.depth = depth;
+    this.scale   = depthScale(depth);
+    this.r       = 0;
+    this.maxR    = rand(22, 72) * this.scale;
+    this.spd     = rand(0.5, 1.0) * (0.5 + depth * 0.5);
+    this.baseAlpha = depthAlpha(depth) * 0.8;
+    this.alpha   = this.baseAlpha;
+    this.delay   = delay; this.age = -delay;
+    this.ryRatio = 0.04 + depth * 0.30;
+    this.done    = false;
+  }
+  update() {
+    this.age++;
+    if (this.age < 0) return;
+    this.r    += this.spd;
+    this.alpha = this.baseAlpha * (1 - this.r / this.maxR);
+    if (this.r >= this.maxR) this.done = true;
+  }
+  draw() {
+    if (this.age < 0 || this.alpha < 0.01) return;
+    ctx.save();
+    ctx.strokeStyle = depthColor(this.depth, this.alpha);
+    ctx.lineWidth   = clamp(0.7 * this.scale, 0.3, 1.6);
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y, this.r, this.r * this.ryRatio, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---- Crown ----
+class Crown {
+  constructor(x, y, depth) {
+    this.x = x; this.y = y; this.depth = depth;
+    this.scale   = depthScale(depth) * 1.15;
+    this.life    = 0;
+    this.maxLife = randInt(18, 30);
+    this.done    = false;
+    this.spikes  = randInt(5, 8);
+    this.spikeData = Array.from({length: this.spikes}, (_, i) => ({
+      angle: (i / this.spikes) * Math.PI * 2 - Math.PI * 0.5 + rand(-0.15, 0.15),
+      h:     rand(0.65, 1.35)
+    }));
+  }
+  update() { this.life++; if (this.life >= this.maxLife) this.done = true; }
+  draw() {
+    const t      = this.life / this.maxLife;
+    const riseT  = Math.min(t / 0.25, 1);
+    const fallT  = t > 0.25 ? (t - 0.25) / 0.75 : 0;
+    const alpha  = riseT * (1 - fallT) * depthAlpha(this.depth);
+    if (alpha < 0.01) return;
+
+    const spikeH = 17 * this.scale * riseT * (1 - fallT * 0.55);
+    const baseR  = 4.5 * this.scale;
+    const spikeW = 2.4 * this.scale;
+    const squash = 0.10 + this.depth * 0.25;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.scale(1, squash + (1 - squash) * 0.32);
+    ctx.fillStyle = depthColor(this.depth, alpha);
+
+    for (const s of this.spikeData) {
+      ctx.save();
+      ctx.rotate(s.angle);
+      const h = spikeH * s.h;
+      ctx.beginPath();
+      ctx.moveTo(-spikeW * 0.5, -baseR);
+      ctx.quadraticCurveTo(spikeW * 0.15, -baseR - h * 1.15, 0, -baseR - h);
+      ctx.quadraticCurveTo(-spikeW * 0.15, -baseR - h * 1.15, spikeW * 0.5, -baseR);
+      ctx.closePath();
+      ctx.fill();
+
+      // bead on tip
+      if (riseT > 0.55 && fallT < 0.45) {
+        ctx.fillStyle = depthColor(this.depth, alpha * 0.75);
+        ctx.beginPath();
+        ctx.arc(0, -(baseR + h + 2.5 * this.scale), 1.5 * this.scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = depthColor(this.depth, alpha);
+      }
+      ctx.restore();
+    }
+
+    // base pool
+    ctx.fillStyle = depthColor(this.depth, alpha * 0.45);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, baseR * 1.5, baseR * 0.38, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ---- Spray Particle ----
+class Particle {
+  constructor(x, y, depth) {
+    this.x = x; this.y = y; this.depth = depth;
+    this.scale   = depthScale(depth);
+    const ang    = rand(-Math.PI * 0.88, -Math.PI * 0.12);
+    const spd    = rand(0.7, 3.8) * this.scale;
+    this.vx      = Math.cos(ang) * spd;
+    this.vy      = Math.sin(ang) * spd;
+    this.gravity = rand(0.06, 0.15) * this.scale;
+    this.life    = 0;
+    this.maxLife = randInt(20, 42);
+    this.r       = rand(0.7, 2.2) * this.scale;
+    this.done    = false;
+  }
+  update() {
+    this.vy += this.gravity;
+    this.x  += this.vx;
+    this.y  += this.vy * (0.1 + this.depth * 0.22);
+    this.life++;
+    if (this.life >= this.maxLife) this.done = true;
+  }
+  draw() {
+    const a = (1 - this.life / this.maxLife) * depthAlpha(this.depth) * 0.9;
+    ctx.save();
+    ctx.fillStyle = depthColor(this.depth, a);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---- Mist dot ----
+class MistDot {
+  constructor(init = false) { this.reset(init); }
+  reset(init = false) {
+    this.depth = Math.random();
+    this.x     = rand(0, W);
+    this.y     = init ? rand(HORIZON_Y, H) : groundY(this.depth) - rand(0, 50 * depthScale(this.depth));
+    this.r     = rand(0.3, 1.3) * depthScale(this.depth);
+    this.alpha = rand(0.03, 0.18) * depthAlpha(this.depth);
+    this.vx    = rand(-0.12, 0.12);
+    this.vy    = rand(0.04, 0.2) * depthSpeed(this.depth);
+  }
+  update() { this.x += this.vx; this.y += this.vy; if (this.y > H + 4) this.reset(); }
+  draw() {
+    ctx.save();
+    ctx.fillStyle = depthColor(this.depth, this.alpha);
+    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---- Impact ----
+function spawnImpact(x, y, depth) {
+  const rings = randInt(2, 4);
+  for (let i = 0; i < rings; i++) ripples.push(new Ripple(x, y, depth, i * 7));
+  crowns.push(new Crown(x, y, depth));
+  const n = randInt(5, 13);
+  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, depth));
+}
+
+// ---- Init ----
+for (let i = 0; i < 90;  i++) mistDots.push(new MistDot(true));
+for (let i = 0; i < 40;  i++) drops.push(new Drop(true));
+
+// ---- Render loop ----
+let spawnT = 0;
+function loop() {
+  // spawn
+  if (++spawnT >= 2) { drops.push(new Drop()); spawnT = 0; }
+
+  // update
+  mistDots.forEach(d => d.update());
+  drops.forEach(d => d.update());
+  ripples.forEach(r => r.update());
+  crowns.forEach(c => c.update());
+  particles.forEach(p => p.update());
+
+  // cull
+  drops     = drops.filter(d => !d.done);
+  ripples   = ripples.filter(r => !r.done);
+  crowns    = crowns.filter(c => !c.done);
+  particles = particles.filter(p => !p.done);
+
+  // draw
+  ctx.fillStyle = 'rgba(0,0,0,0.40)';
+  ctx.fillRect(0, 0, W, H);
+
+  // horizon depth fog
+  const fog = ctx.createLinearGradient(0, HORIZON_Y - 20, 0, HORIZON_Y + 100);
+  fog.addColorStop(0,   'rgba(140,185,255,0.00)');
+  fog.addColorStop(0.45,'rgba(140,185,255,0.035)');
+  fog.addColorStop(1,   'rgba(0,0,0,0.00)');
+  ctx.fillStyle = fog;
+  ctx.fillRect(0, HORIZON_Y - 20, W, 120);
+
+  // painter's order: far → near
+  const byDepth = arr => arr.slice().sort((a, b) => a.depth - b.depth);
+  mistDots.forEach(d => d.draw());
+  byDepth(ripples).forEach(r => r.draw());
+  byDepth(drops).forEach(d => d.draw());
+  byDepth(particles).forEach(p => p.draw());
+  byDepth(crowns).forEach(c => c.draw());
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
