@@ -32,67 +32,105 @@ window.addEventListener('resize', () => { resize(); initMist(); });
 const rand    = (a, b) => Math.random() * (b - a) + a;
 const randInt = (a, b) => Math.floor(rand(a, b));
 
-/* ── depth helpers (0 = far, 1 = near) ── */
-const depthScale = d => 0.25 + d * 0.75;
-const depthSpeed = d => 1.2  + d * 3.2;     // slow base
-const depthAlpha = d => 0.12 + d * 0.78;
+/* ══════════════════════════════════════
+   PERSPECTIVE SURFACE
+   A flat horizontal plane viewed at an angle.
+   "depth" goes 0 (far, top of screen) → 1 (near, bottom of screen).
+   
+   We map a random surface point as:
+     - surfX: random across screen width
+     - surfY: depth controls Y position on screen
+       near (depth=1) → bottom of screen
+       far  (depth=0) → horizon line (HORIZON)
+   
+   Rain falls straight down from above, lands on this plane.
+   Everything scales with depth: bigger/slower/brighter near bottom.
+   ══════════════════════════════════════ */
+
+const HORIZON = 0.30;   // horizon as fraction of H (where far edge of plane sits)
+
+// Convert a depth (0..1) to a Y position on screen
+function depthToY(d) {
+  return H * (HORIZON + d * (1.0 - HORIZON));
+}
+
+// Given a screen Y, what depth is it?
+function yToDepth(y) {
+  return Math.max(0, Math.min(1, (y / H - HORIZON) / (1.0 - HORIZON)));
+}
+
+const depthScale = d => 0.15 + d * 0.85;
+const depthSpeed = d => 0.8  + d * 3.8;
+const depthAlpha = d => 0.10 + d * 0.80;
 
 function dropColor(depth, alpha) {
-  /* near = bright icy white-blue, far = muted steel */
   const r = Math.round(180 + depth * 60);
   const g = Math.round(215 + depth * 35);
   const b = 255;
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/* ── background gradient (water blue) ── */
+/* ── background ── */
 function drawBG() {
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0,   '#061c2e');
-  g.addColorStop(0.4, '#0d3352');
-  g.addColorStop(0.75,'#0e4a6e');
-  g.addColorStop(1,   '#0a3350');
+  g.addColorStop(0,    '#061c2e');
+  g.addColorStop(0.4,  '#0d3352');
+  g.addColorStop(0.75, '#0e4a6e');
+  g.addColorStop(1,    '#0a3350');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  /* subtle shimmer layer at bottom third */
-  const sh = ctx.createLinearGradient(0, H * 0.7, 0, H);
+  const sh = ctx.createLinearGradient(0, H * 0.6, 0, H);
   sh.addColorStop(0, 'rgba(40,130,200,0.00)');
-  sh.addColorStop(1, 'rgba(40,160,230,0.09)');
+  sh.addColorStop(1, 'rgba(40,160,230,0.11)');
   ctx.fillStyle = sh;
-  ctx.fillRect(0, H * 0.7, W, H * 0.3);
+  ctx.fillRect(0, H * 0.6, W, H * 0.4);
 }
 
 /* ══════════════════════════════════════
-   DROP  — falls straight down from a
-   random X anywhere across the full width
+   DROP
+   Each drop picks a random X and a random depth.
+   It falls straight down from above until it hits
+   the surface Y for its depth.
+   Size, speed, alpha all scale with depth.
    ══════════════════════════════════════ */
 class Drop {
   constructor(stagger = false) { this.reset(stagger); }
 
   reset(stagger = false) {
-    this.depth  = Math.pow(Math.random(), 1.2);
+    this.depth  = Math.pow(Math.random(), 0.8);   // bias toward nearer drops
+    this.x      = rand(0, W);
+    this.sy     = depthToY(this.depth);            // Y of surface at this depth
+
     const sc    = depthScale(this.depth);
-    this.x      = rand(0, W);                          // anywhere across screen
-    this.speed  = (2.2 + rand(0, 1.4)) * depthSpeed(this.depth); // slow
-    this.len    = rand(10, 28) * sc;
-    this.y      = stagger ? rand(-H * 0.6, 0) : rand(-this.len * 2, -this.len);
+    this.speed  = (1.5 + rand(0, 1.0)) * depthSpeed(this.depth);
+    this.len    = (6 + rand(0, 20)) * sc;
     this.alpha  = depthAlpha(this.depth) * rand(0.7, 1.0);
-    this.width  = Math.max(0.35, 0.55 * sc);
-    this.done   = false;
+    this.width  = Math.max(0.3, 0.6 * sc);
+
+    // start above the surface
+    this.y = stagger
+      ? rand(-H * 0.3, this.sy - this.len)
+      : rand(-this.len * 4, -this.len);
+
+    this.done = false;
   }
 
   update() {
     this.y += this.speed;
-    if (this.y - this.len > H) {
-      spawnImpact(this.x, H * rand(0.8, 1.02), this.depth);
+    if (this.y >= this.sy) {
+      spawnImpact(this.x, this.sy, this.depth);
       this.done = true;
     }
   }
 
   draw() {
-    const top = this.y - this.len;
-    const g   = ctx.createLinearGradient(this.x, top, this.x, this.y);
+    // only draw the portion above the surface
+    const top    = this.y - this.len;
+    const bottom = Math.min(this.y, this.sy);
+    if (bottom <= top) return;
+
+    const g = ctx.createLinearGradient(this.x, top, this.x, bottom);
     g.addColorStop(0, dropColor(this.depth, 0));
     g.addColorStop(1, dropColor(this.depth, this.alpha));
     ctx.save();
@@ -101,25 +139,31 @@ class Drop {
     ctx.lineCap     = 'round';
     ctx.beginPath();
     ctx.moveTo(this.x, top);
-    ctx.lineTo(this.x, this.y);
+    ctx.lineTo(this.x, bottom);
     ctx.stroke();
     ctx.restore();
   }
 }
 
-/* ══════════════════════════════════════  RIPPLE  */
+/* ══════════════════════════════════════
+   RIPPLE
+   Ellipse on the perspective plane:
+   - width grows normally
+   - height is squashed by perspective (flatter = further away)
+   ══════════════════════════════════════ */
 class Ripple {
   constructor(x, y, depth, delay = 0) {
     this.x = x; this.y = y; this.depth = depth;
-    const sc     = depthScale(depth);
-    this.r       = 0;
-    this.maxR    = rand(14, 52) * sc;
-    this.spd     = rand(0.28, 0.65) * (0.5 + depth * 0.5);
-    this.base    = depthAlpha(depth) * 0.7;
-    this.alpha   = this.base;
-    this.delay   = delay; this.age = -delay;
-    this.ry      = 0.05 + depth * 0.22;
-    this.done    = false;
+    const sc      = depthScale(depth);
+    this.r        = 0;
+    this.maxR     = rand(18, 60) * sc;
+    this.spd      = rand(0.3, 0.7) * (0.4 + depth * 0.6);
+    this.base     = depthAlpha(depth) * 0.75;
+    this.alpha    = this.base;
+    this.age      = -delay;
+    // perspective squash: near = rounder, far = very flat ellipse
+    this.ry       = 0.04 + depth * 0.28;
+    this.done     = false;
   }
   update() {
     this.age++;
@@ -132,7 +176,7 @@ class Ripple {
     if (this.age < 0 || this.alpha < 0.01) return;
     ctx.save();
     ctx.strokeStyle = dropColor(this.depth, this.alpha);
-    ctx.lineWidth   = Math.max(0.3, 0.6 * depthScale(this.depth));
+    ctx.lineWidth   = Math.max(0.3, 0.7 * depthScale(this.depth));
     ctx.beginPath();
     ctx.ellipse(this.x, this.y, this.r, this.r * this.ry, 0, 0, Math.PI * 2);
     ctx.stroke();
@@ -140,20 +184,22 @@ class Ripple {
   }
 }
 
-/* ══════════════════════════════════════  SPLASH PARTICLE  */
+/* ══════════════════════════════════════
+   SPLASH PARTICLE — all directions, chaotic
+   ══════════════════════════════════════ */
 class Particle {
   constructor(x, y, depth) {
     this.x = x; this.y = y; this.depth = depth;
-    const sc    = depthScale(depth);
-    const ang   = rand(0, Math.PI * 2);
-    const spd   = rand(0.3, 2.8) * sc;
-    this.vx     = Math.cos(ang) * spd;
-    this.vy     = Math.sin(ang) * spd;
-    this.grav   = rand(0.04, 0.1) * sc;
-    this.life   = 0;
-    this.maxLife= randInt(22, 48);
-    this.r      = rand(0.6, 1.8) * sc;
-    this.done   = false;
+    const sc     = depthScale(depth);
+    const ang    = rand(0, Math.PI * 2);
+    const spd    = rand(0.3, 2.6) * sc;
+    this.vx      = Math.cos(ang) * spd;
+    this.vy      = Math.sin(ang) * spd * 0.5;  // squash vertical for perspective feel
+    this.grav    = rand(0.03, 0.10) * sc;
+    this.life    = 0;
+    this.maxLife = randInt(18, 44);
+    this.r       = rand(0.5, 1.7) * sc;
+    this.done    = false;
   }
   update() {
     this.vy += this.grav;
@@ -180,17 +226,18 @@ class MistDot {
   reset(init = false) {
     this.depth = Math.random();
     this.x     = rand(0, W);
-    this.y     = init ? rand(0, H) : H + 4;
+    const sy   = depthToY(this.depth);
+    this.y     = init ? rand(depthToY(0), sy) : sy;
     const sc   = depthScale(this.depth);
-    this.r     = rand(0.4, 1.6) * sc;
-    this.alpha = rand(0.02, 0.10) * depthAlpha(this.depth);
-    this.vx    = rand(-0.1, 0.1);
-    this.vy    = -(rand(0.06, 0.25) * sc);   // drift upward slowly
+    this.r     = rand(0.3, 1.4) * sc;
+    this.alpha = rand(0.02, 0.09) * depthAlpha(this.depth);
+    this.vx    = rand(-0.08, 0.08);
+    this.vy    = -(rand(0.05, 0.20) * sc);
   }
   update() {
     this.x += this.vx;
     this.y += this.vy;
-    if (this.y < -4) this.reset();
+    if (this.y < depthToY(0) - 4) this.reset();
   }
   draw() {
     ctx.save();
@@ -218,36 +265,30 @@ function spawnImpact(x, y, depth) {
   for (let i = 0; i < n; i++) particles.push(new Particle(x, y, depth));
 }
 
-/* ── seed initial drops spread across screen ── */
-for (let i = 0; i < 55; i++) drops.push(new Drop(true));
+for (let i = 0; i < 65; i++) drops.push(new Drop(true));
 
 /* ══════════════════════════════════════  LOOP  */
 let spawnT = 0;
-const SPAWN_EVERY = 5;   // fewer frames between spawns = more drops; higher = sparser
+const SPAWN_EVERY = 4;
 
 function loop() {
-  /* spawn a new drop every N frames */
   if (++spawnT >= SPAWN_EVERY) {
     drops.push(new Drop());
     spawnT = 0;
   }
 
-  /* update */
   mistDots.forEach(d => d.update());
   drops.forEach(d => d.update());
   ripples.forEach(r => r.update());
   particles.forEach(p => p.update());
 
-  /* cull */
   drops     = drops.filter(d => !d.done);
   ripples   = ripples.filter(r => !r.done);
   particles = particles.filter(p => !p.done);
 
-  /* ── draw ── */
   drawBG();
 
-  /* trail fade */
-  ctx.fillStyle = 'rgba(6,28,46,0.30)';
+  ctx.fillStyle = 'rgba(6,28,46,0.28)';
   ctx.fillRect(0, 0, W, H);
 
   mistDots.forEach(d => d.draw());
