@@ -8,10 +8,10 @@ Pure HTML canvas rain effect. No libraries. Just me figuring out how this works.
 
 👉 [View Animation](https://yota321.github.io/Rainfall_Animation_Learning/)
 
-Or go straight to a version:
+Or jump to a specific version:
 
-- [Rain v1](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v1.html) — first attempt
-- [Rain v2 / index](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v2.html) — fixed version
+- [Rain v1](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v1.html)
+- [Rain v2](https://yota321.github.io/Rainfall_Animation_Learning/Rain_v2.html)
 
 ---
 
@@ -49,9 +49,9 @@ This repo is my learning process, not a finished product.
 
 | File | What it is |
 |------|------------|
-| `index.html` | Same as v2, GitHub Pages entry point |
-| `Rain_v1.html` | First version, perspective rain converging to a vanishing point |
-| `Rain_v2.html` | Fixed version, drops fall straight, water-blue background |
+| `index.html` | The final version, what you see live |
+| `Rain_v1.html` | First attempt, perspective rain converging to a vanishing point |
+| `Rain_v2.html` | Kept it here since index will get updated to v3 or something eventually |
 
 ---
 
@@ -72,4 +72,10 @@ Not a copy. Used it as a reference to understand the concept, then built my own 
 
 ---
 
-*Yota321 — learning in public.*
+## This Is Just One Thing I Made
+
+If you want to see actual design work: [sayanahamed.online](https://www.sayanahamed.online/)
+
+---
+
+*Golam Sayon Ahamed — learning in public.*
