@@ -145,8 +145,8 @@ class Particle {
   constructor(x, y, depth) {
     this.x = x; this.y = y; this.depth = depth;
     const sc    = depthScale(depth);
-    const ang   = rand(-Math.PI * 0.92, -Math.PI * 0.08);
-    const spd   = rand(0.4, 2.2) * sc;
+    const ang   = rand(0, Math.PI * 2);
+    const spd   = rand(0.3, 2.8) * sc;
     this.vx     = Math.cos(ang) * spd;
     this.vy     = Math.sin(ang) * spd;
     this.grav   = rand(0.04, 0.1) * sc;
